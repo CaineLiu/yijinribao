@@ -1,0 +1,5 @@
+{
+  "name": "日报转换助手 - 飞书多维表格版",
+  "description": "智能提取员工日报数据，一键转换为飞书多维表格（Bitable）可用的 TSV 格式。",
+  "requestFramePermissions": []
+}

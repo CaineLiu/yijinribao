@@ -1,0 +1,313 @@
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { transformDailyReportStream } from './services/geminiService';
+import { TEMPLATES, APP_TITLE, APP_SUBTITLE, COMPANY_NAME, HistoryItem } from './constants';
+import Button from './components/Button';
+
+// 平面设计 Logo
+const CompanyLogo = () => (
+  <div className="flex items-center gap-4">
+    <svg width="64" height="64" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="45" cy="45" r="32" fill="#EAB308" />
+      <circle cx="45" cy="45" r="11" fill="white" />
+      <circle cx="20" cy="24" r="5" fill="#EAB308" />
+      <circle cx="82" cy="78" r="15" fill="#EAB308" />
+    </svg>
+    <div className="flex flex-col justify-center">
+      <span className="text-4xl font-black text-slate-900 tracking-tighter leading-none">亿锦企服</span>
+      <span className="text-[11px] font-black text-slate-800 tracking-[0.15em] mt-1.5 flex items-center gap-1">
+        YIJINQIFU <span className="text-[9px] border-[1.5px] border-slate-900 px-0.5 leading-none">CO LTD</span>
+      </span>
+    </div>
+  </div>
+);
+
+export default function App() {
+  const [inputText, setInputText] = useState('');
+  const [outputText, setOutputText] = useState('');
+  const [isTransforming, setIsTransforming] = useState(false);
+  const [activeTemplate, setActiveTemplate] = useState('public');
+  const [customColumns, setCustomColumns] = useState('日期, 姓名, 完成单数, 备注');
+  const [copySuccess, setCopySuccess] = useState(false);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  
+  const headerScrollRef = useRef<HTMLDivElement>(null);
+  const dataScrollRef = useRef<HTMLDivElement>(null);
+
+  const [staffMap, setStaffMap] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    Object.entries(TEMPLATES).forEach(([key, config]) => {
+      initial[key] = (config.defaultStaff || []).join(', ');
+    });
+    return initial;
+  });
+
+  const currentColumns = useMemo(() => {
+    if (activeTemplate === 'custom') {
+      return customColumns.split(/[,，\n]/).map(c => c.trim()).filter(c => c);
+    }
+    return TEMPLATES[activeTemplate].columns;
+  }, [activeTemplate, customColumns]);
+
+  const currentStaffList = useMemo(() => {
+    return (staffMap[activeTemplate] || '')
+      .split(/[,，\n]/)
+      .map(s => s.trim())
+      .filter(s => s);
+  }, [staffMap, activeTemplate]);
+
+  const missingStaff = useMemo(() => {
+    const match = outputText.match(/\[\[MISSING: (.*?)\]\]/);
+    if (!match) return null;
+    const names = match[1].trim();
+    return names === '无' ? [] : names.split(/[,，]/).map(n => n.trim()).filter(n => n);
+  }, [outputText]);
+
+  const cleanOutputText = useMemo(() => {
+    return outputText.replace(/\[\[MISSING: .*?\]\]/, '').trim();
+  }, [outputText]);
+
+  const parsedRows = useMemo(() => {
+    return cleanOutputText.split('\n').filter(row => row.trim()).map(row => row.split('\t'));
+  }, [cleanOutputText]);
+
+  // 精准同步滚动
+  const handleDataScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    if (headerScrollRef.current) {
+      headerScrollRef.current.scrollLeft = e.currentTarget.scrollLeft;
+    }
+  };
+
+  useEffect(() => {
+    const savedHistory = localStorage.getItem('report_history_v3');
+    if (savedHistory) {
+      try { setHistory(JSON.parse(savedHistory)); } catch (e) {}
+    }
+    const savedStaff = localStorage.getItem('staff_config_v1');
+    if (savedStaff) {
+      try {
+        const parsed = JSON.parse(savedStaff);
+        setStaffMap(prev => ({ ...prev, ...parsed }));
+      } catch (e) {}
+    }
+    const savedCustomCols = localStorage.getItem('custom_columns_config');
+    if (savedCustomCols) setCustomColumns(savedCustomCols);
+    document.title = `${COMPANY_NAME} | ${APP_TITLE}`;
+  }, []);
+
+  const handleTransform = async () => {
+    if (!inputText.trim()) return;
+    setIsTransforming(true);
+    setOutputText('');
+    try {
+      const template = TEMPLATES[activeTemplate];
+      const stream = transformDailyReportStream(
+        inputText, 
+        currentColumns, 
+        template.hint, 
+        currentStaffList
+      );
+      let fullResult = '';
+      for await (const chunk of stream) {
+        fullResult += chunk;
+        setOutputText(fullResult);
+      }
+      const cleanResult = fullResult.replace(/```[a-z]*\n/g, '').replace(/```/g, '').trim();
+      setOutputText(cleanResult);
+      const newHistory = [{
+        date: new Date().toLocaleString(),
+        text: cleanResult,
+        template: template.label
+      }, ...history].slice(0, 10);
+      setHistory(newHistory);
+      localStorage.setItem('report_history_v3', JSON.stringify(newHistory));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '处理请求时出错');
+    } finally {
+      setIsTransforming(false);
+    }
+  };
+
+  const handleCopy = () => {
+    if (!cleanOutputText) return;
+    navigator.clipboard.writeText(cleanOutputText).then(() => {
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2000);
+    });
+  };
+
+  // 严格对齐配置
+  const cellWidth = "w-[160px] flex-shrink-0";
+  const rowPadding = "px-8";
+
+  return (
+    <div className="min-h-screen bg-[#FDFDFD] p-6 md:p-12 flex flex-col items-center">
+      <nav className="w-full max-w-7xl flex justify-between items-center mb-16 px-6">
+        <CompanyLogo />
+        <div className="hidden lg:flex items-center gap-4">
+          <span className="text-xs font-black text-slate-400 uppercase tracking-[0.3em] bg-white px-6 py-2.5 rounded-full border border-slate-100 shadow-sm">Enterprise System V4.0</span>
+        </div>
+      </nav>
+
+      <div className="w-full max-w-7xl">
+        <header className="mb-14 text-center">
+          <h1 className="text-6xl md:text-8xl font-black text-slate-950 mb-6 tracking-tighter leading-none">{APP_TITLE}</h1>
+          <p className="text-slate-400 font-bold text-2xl max-w-2xl mx-auto">{APP_SUBTITLE}</p>
+        </header>
+
+        {/* 模板选择 - 包含 IP 部门 */}
+        <div className="flex flex-wrap justify-center gap-4 mb-14">
+          {Object.entries(TEMPLATES).map(([key, config]) => (
+            <button
+              key={key}
+              onClick={() => { setActiveTemplate(key); setOutputText(''); }}
+              className={`px-12 py-5 rounded-[30px] text-lg font-black transition-all duration-300 transform active:scale-95 shadow-md border-2 ${
+                activeTemplate === key ? 'bg-amber-500 text-white border-amber-500 shadow-amber-200' : 'bg-white text-slate-400 border-slate-100 hover:border-amber-400 hover:text-amber-600'
+              }`}
+            >
+              {config.label}
+            </button>
+          ))}
+        </div>
+
+        {/* 配置区 */}
+        <div className="w-full max-w-5xl mx-auto mb-16 grid grid-cols-1 md:grid-cols-2 gap-10">
+          <div className="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm">
+             <div className="flex justify-between items-center mb-6">
+                <label className="text-sm font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
+                  <div className="w-2.5 h-2.5 bg-amber-500 rounded-full animate-pulse"></div>应报人员名单
+                </label>
+                <button onClick={() => setStaffMap(prev => ({...prev, [activeTemplate]: (TEMPLATES[activeTemplate].defaultStaff || []).join(', ')}))} className="text-xs font-black text-amber-600 hover:underline">加载默认</button>
+             </div>
+             <textarea rows={2} value={staffMap[activeTemplate]} onChange={(e) => setStaffMap(prev => ({ ...prev, [activeTemplate]: e.target.value }))} className="w-full px-8 py-5 bg-slate-50 border border-slate-100 rounded-3xl focus:ring-4 focus:ring-amber-50 outline-none text-base font-bold text-slate-700 resize-none transition-all" placeholder="输入名单，逗号分隔..." />
+          </div>
+          <div className="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm flex flex-col justify-center">
+             <div className="flex items-center gap-6">
+                <div className="w-16 h-16 bg-amber-50 rounded-3xl flex items-center justify-center text-3xl shadow-inner border border-amber-100">📋</div>
+                <div>
+                  <h4 className="text-xl font-black text-slate-900">{TEMPLATES[activeTemplate].label} 管理模式</h4>
+                  <p className="text-base font-bold text-slate-400 mt-1 italic">监控目标: <span className="text-amber-600 font-black text-lg">{currentStaffList.length}</span> 位职员</p>
+                </div>
+             </div>
+             {activeTemplate === 'custom' && (
+                <input type="text" value={customColumns} onChange={(e) => setCustomColumns(e.target.value)} className="mt-6 w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-amber-50 outline-none text-sm font-bold text-slate-800" placeholder="定义维度：日期, IP, 业绩..." />
+             )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 mb-24">
+          {/* 左侧输入 */}
+          <div className="bg-white rounded-[60px] shadow-2xl border border-slate-100 p-12 flex flex-col h-[750px]">
+            <div className="flex justify-between items-center mb-10">
+              <div className="flex items-center gap-5">
+                <div className="w-16 h-16 bg-slate-950 rounded-[28px] flex items-center justify-center text-white font-black italic shadow-2xl text-2xl">IN</div>
+                <h2 className="text-5xl font-black text-slate-900 tracking-tighter">源数据采集</h2>
+              </div>
+              <Button variant="outline" className="text-xs h-10 px-6 rounded-full" onClick={() => setInputText('')}>清空</Button>
+            </div>
+            <textarea className="flex-1 w-full p-10 bg-slate-50 border-none rounded-[48px] focus:ring-8 focus:ring-amber-50 outline-none resize-none text-xl text-slate-600 custom-scrollbar font-bold shadow-inner" placeholder="在此粘贴多人日报原文..." value={inputText} onChange={(e) => setInputText(e.target.value)} />
+            <div className="mt-12">
+              <Button className="w-full py-8 rounded-[40px] text-2xl font-black shadow-2xl bg-amber-500 hover:bg-amber-600 border-none transition-all active:scale-[0.98]" onClick={handleTransform} isLoading={isTransforming}>开始结构化转换</Button>
+            </div>
+          </div>
+
+          {/* 右侧输出 - 固定表格显示 */}
+          <div className="bg-[#FFFDF3] rounded-[60px] shadow-2xl border-4 border-amber-100 p-12 flex flex-col h-[750px] relative">
+            <div className="flex justify-between items-center mb-10">
+              <div className="flex items-center gap-5">
+                <div className="w-16 h-16 bg-amber-500 rounded-[28px] flex items-center justify-center text-white font-black italic shadow-2xl text-2xl">OUT</div>
+                <h2 className="text-5xl font-black text-amber-900 tracking-tighter">结构化解析</h2>
+              </div>
+              <Button 
+                variant={copySuccess ? "secondary" : "outline"} 
+                className={`text-sm font-black h-16 px-10 rounded-[28px] border-4 transition-all ${copySuccess ? 'bg-emerald-500 border-emerald-500 shadow-emerald-100' : 'border-amber-200 text-amber-700 hover:bg-amber-100'}`}
+                onClick={handleCopy}
+                disabled={!cleanOutputText}
+              >
+                {copySuccess ? '✓ 已复制到剪贴板' : '复制数据(不含表头)'}
+              </Button>
+            </div>
+
+            {/* 状态检测 */}
+            {missingStaff !== null && (
+              <div className={`mb-8 p-6 rounded-[32px] border-4 flex items-center gap-6 ${missingStaff.length > 0 ? 'bg-red-500/10 border-red-100 text-red-700' : 'bg-emerald-500/10 border-emerald-100 text-emerald-700'}`}>
+                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl shadow-lg ${missingStaff.length > 0 ? 'bg-red-500 text-white' : 'bg-emerald-500 text-white'}`}>
+                  {missingStaff.length > 0 ? '!' : '✓'}
+                </div>
+                <div className="flex-1">
+                  <p className="text-xs font-black uppercase tracking-widest opacity-60 leading-none mb-1">Attendance Check</p>
+                  <p className="text-lg font-black">{missingStaff.length > 0 ? `检测到 ${missingStaff.length} 人缺勤：${missingStaff.join(', ')}` : '今日全员报送完毕'}</p>
+                </div>
+              </div>
+            )}
+
+            {/* 核心表格展示区 */}
+            <div className="flex-1 flex flex-col overflow-hidden bg-white rounded-[48px] border-2 border-amber-200 shadow-inner">
+              {/* 对齐表头 */}
+              <div ref={headerScrollRef} className="bg-amber-500 text-white flex h-14 overflow-hidden border-b-2 border-amber-600 flex-shrink-0">
+                <div className={`flex items-center whitespace-nowrap ${rowPadding} h-full`}>
+                  {currentColumns.map((col, i) => (
+                    <div key={i} className={`${cellWidth} px-4 border-r border-amber-400/30 h-full flex items-center font-mono text-sm font-black uppercase truncate`}>
+                      {col}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* 对齐数据行 */}
+              <div 
+                ref={dataScrollRef} 
+                onScroll={handleDataScroll}
+                className="flex-1 overflow-auto custom-scrollbar"
+              >
+                <div className="flex flex-col min-w-max">
+                  {parsedRows.map((row, rowIndex) => (
+                    <div key={rowIndex} className={`flex border-b border-amber-50 hover:bg-amber-50/50 transition-colors ${rowPadding}`}>
+                      {row.map((cell, cellIndex) => (
+                        <div key={cellIndex} className={`${cellWidth} px-4 py-4 font-mono text-sm text-amber-900 truncate`}>
+                          {cell || '0'}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                  {isTransforming && (
+                    <div className="p-16 text-center text-amber-300 font-black animate-pulse text-lg">
+                      AI 正在进行像素级核对...
+                    </div>
+                  )}
+                  {parsedRows.length === 0 && !isTransforming && (
+                    <div className="p-20 text-center text-slate-200 font-bold italic">
+                      结构化矩阵将在此实时生成
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            <div className="mt-4 text-center opacity-30 text-[10px] font-black uppercase tracking-[0.4em] text-amber-900 italic">
+               Visual Grid Alignment Optimized for Bitable
+            </div>
+          </div>
+        </div>
+
+        <footer className="mt-auto py-24 text-center border-t-2 border-slate-100 bg-white rounded-t-[100px]">
+          <div className="flex flex-col items-center gap-10">
+             <CompanyLogo />
+             <div className="flex flex-wrap justify-center gap-14 text-sm font-black text-slate-400 uppercase tracking-[0.4em]">
+              <span>© 2024 {COMPANY_NAME}</span>
+              <span className="text-amber-400">•</span>
+              <span>结构化办公效率引擎</span>
+              <span className="text-amber-400">•</span>
+              <span>Gold V4.0</span>
+            </div>
+          </div>
+        </footer>
+      </div>
+
+      <style>{`
+        .custom-scrollbar::-webkit-scrollbar { height: 8px; width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #fffbeb; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #fde68a; border-radius: 10px; border: 2px solid #fffbeb; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #fbbf24; }
+      `}</style>
+    </div>
+  );
+}
