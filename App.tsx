@@ -14,6 +14,7 @@ export default function App() {
   
   const dataScrollRef = useRef<HTMLDivElement>(null);
 
+  // 自动滚动到输出底部
   useEffect(() => {
     if (isTransforming && dataScrollRef.current) {
       dataScrollRef.current.scrollTop = dataScrollRef.current.scrollHeight;
@@ -21,8 +22,20 @@ export default function App() {
   }, [outputText, isTransforming]);
 
   const currentColumns = useMemo(() => TEMPLATES[activeTemplate].columns, [activeTemplate]);
-  const cleanOutputText = useMemo(() => outputText.replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim(), [outputText]);
-  const parsedRows = useMemo(() => cleanOutputText ? cleanOutputText.split('\n').filter(r => r.trim()).map(r => r.split('\t')) : [], [cleanOutputText]);
+  
+  // 清理输出文本，移除 Markdown 标记
+  const cleanOutputText = useMemo(() => {
+    return outputText
+      .replace(/```[a-z]*\n?/gi, '')
+      .replace(/```/g, '')
+      .trim();
+  }, [outputText]);
+
+  // 解析 TSV 数据为表格行
+  const parsedRows = useMemo(() => {
+    if (!cleanOutputText) return [];
+    return cleanOutputText.split('\n').filter(r => r.trim()).map(r => r.split('\t'));
+  }, [cleanOutputText]);
 
   const handleTransform = async () => {
     if (!inputText.trim()) return;
@@ -31,24 +44,21 @@ export default function App() {
     setErrorMessage(null);
     setOutputText('');
 
-    // 设置一个 15 秒的强制超时保护
-    const timeoutId = setTimeout(() => {
-      if (isTransforming && !outputText) {
-        setErrorMessage("响应过慢：请检查代理是否开启‘全局模式’，或点击右上角 Reset 刷新。");
-        setIsTransforming(false);
-      }
-    }, 15000);
-    
     try {
       const template = TEMPLATES[activeTemplate];
-      const stream = transformDailyReportStream(inputText, currentColumns, template.hint, template.defaultStaff);
+      const stream = transformDailyReportStream(
+        inputText, 
+        currentColumns, 
+        template.hint, 
+        template.defaultStaff
+      );
+      
       for await (const chunk of stream) {
         setOutputText(prev => prev + chunk);
       }
-      clearTimeout(timeoutId);
     } catch (err: any) {
-      setErrorMessage(err.message);
-      clearTimeout(timeoutId);
+      console.error("Transform Error:", err);
+      setErrorMessage(err.message || "提取失败，请检查网络或稍后重试。");
     } finally {
       setIsTransforming(false);
     }
@@ -62,108 +72,110 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-['Noto_Sans_SC']">
-      <header className="w-full bg-white border-b border-slate-200 px-6 py-4 flex justify-between items-center shadow-sm">
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+      {/* 顶部导航 */}
+      <header className="bg-white border-b px-6 py-3 flex justify-between items-center shadow-sm">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-indigo-600 rounded flex items-center justify-center text-white font-bold">R</div>
-          <h1 className="text-slate-800 font-bold tracking-tight">{COMPANY_NAME} 智能日报</h1>
+          <div className="w-8 h-8 bg-blue-600 rounded flex items-center justify-center text-white font-bold shadow-sm">R</div>
+          <h1 className="text-lg font-bold text-slate-800 tracking-tight">{COMPANY_NAME} 智能提取</h1>
         </div>
-        <div className="flex gap-2">
-          {Object.entries(TEMPLATES).map(([key, config]) => (
-            <button
-              key={key}
-              onClick={() => { setActiveTemplate(key); setOutputText(''); setErrorMessage(null); }}
-              className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${activeTemplate === key ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100'}`}
-            >
-              {config.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-4">
+          <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
+            {Object.entries(TEMPLATES).map(([key, config]) => (
+              <button
+                key={key}
+                onClick={() => { setActiveTemplate(key); setOutputText(''); setErrorMessage(null); }}
+                className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTemplate === key ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:bg-white/50'}`}
+              >
+                {config.label}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
-      <main className="flex-1 max-w-7xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-2 gap-6 h-[calc(100vh-100px)]">
-        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
-          <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-            <span className="text-xs font-black text-slate-400 uppercase tracking-widest">输入原始日报</span>
-            <button onClick={() => {setInputText(''); setOutputText(''); setErrorMessage(null);}} className="text-[10px] font-bold text-slate-400 hover:text-rose-500">清空重来</button>
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 grid grid-cols-1 lg:grid-cols-2 gap-4 h-[calc(100vh-100px)]">
+        {/* 输入区 */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
+          <div className="p-3 border-b bg-slate-50/50 flex justify-between items-center px-5">
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">原始内容</span>
+            <button onClick={() => {setInputText(''); setOutputText(''); setErrorMessage(null);}} className="text-[10px] text-slate-400 hover:text-blue-600">清空</button>
           </div>
           <textarea 
-            className="flex-1 p-6 outline-none resize-none text-slate-700 font-medium placeholder:text-slate-300 bg-transparent text-sm"
-            placeholder="请在此粘贴员工日报..."
+            className="flex-1 p-6 outline-none resize-none text-slate-700 text-sm leading-relaxed placeholder:text-slate-300"
+            placeholder="请在此粘贴日报内容..."
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
           />
-          <div className="p-4 border-t border-slate-100 bg-white">
+          <div className="p-5 border-t bg-white">
             {errorMessage && (
-              <div className="mb-4 p-4 bg-rose-50 border border-rose-100 rounded-2xl text-rose-600 text-[11px] font-bold leading-relaxed">
-                ⚠️ {errorMessage}
+              <div className="mb-4 p-3 bg-rose-50 border border-rose-100 rounded-xl">
+                <p className="text-[11px] text-rose-600 font-bold leading-tight">⚠️ {errorMessage}</p>
               </div>
             )}
             <Button 
-              className="w-full py-4 bg-indigo-600 text-white text-lg font-black rounded-2xl shadow-lg active:scale-95"
+              className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-lg shadow-xl hover:bg-black active:scale-[0.98] transition-all"
               onClick={handleTransform}
               isLoading={isTransforming}
             >
-              {isTransforming ? "正在提取中..." : "开始 AI 提取"}
+              {isTransforming ? "正在提取..." : "一键开始提取"}
             </Button>
           </div>
         </div>
 
-        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
-          <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-            <span className="text-xs font-black text-slate-400 uppercase tracking-widest">提取结果预览</span>
+        {/* 输出区 */}
+        <div className="bg-slate-900 rounded-2xl shadow-2xl flex flex-col overflow-hidden border border-slate-800">
+          <div className="p-3 border-b border-slate-800 bg-slate-900/50 flex justify-between items-center px-5">
+            <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">提取结果</span>
             <button 
               onClick={handleCopy}
               disabled={!cleanOutputText}
-              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${copySuccess ? 'bg-emerald-500 text-white' : 'bg-slate-900 text-white disabled:opacity-20'}`}
+              className={`px-4 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${copySuccess ? 'bg-emerald-500 text-white' : 'bg-white text-slate-900 disabled:opacity-10'}`}
             >
-              {copySuccess ? '✓ 已复制' : '复制表格数据'}
+              {copySuccess ? '复制成功' : '复制数据'}
             </button>
           </div>
           
-          <div className="flex-1 bg-slate-900 overflow-hidden flex flex-col">
-            <div className="bg-slate-800 text-slate-400 flex border-b border-slate-700 overflow-x-auto no-scrollbar">
-              <div className="flex min-w-max">
-                {currentColumns.map((col, i) => (
-                  <div key={i} className="w-28 py-3 text-[10px] font-bold text-center border-r border-slate-700/50">
-                    {col}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div ref={dataScrollRef} className="flex-1 overflow-auto custom-scrollbar">
-              <div className="min-w-max">
-                {parsedRows.map((row, i) => (
-                  <div key={i} className="flex border-b border-slate-800/50 hover:bg-white/5 transition-colors">
-                    {row.map((cell, j) => (
-                      <div key={j} className="w-28 py-4 px-2 text-[11px] text-slate-300 text-center truncate">
-                        {cell || "-"}
-                      </div>
+          <div ref={dataScrollRef} className="flex-1 overflow-auto custom-scrollbar bg-slate-900">
+            {parsedRows.length > 0 ? (
+              <table className="w-full border-collapse text-[11px]">
+                <thead className="sticky top-0 z-10">
+                  <tr className="bg-slate-800">
+                    {currentColumns.map((col, i) => (
+                      <th key={i} className="px-4 py-3 border-b border-r border-slate-700 text-left text-slate-400 font-black min-w-[110px] uppercase tracking-tighter whitespace-nowrap">{col}</th>
                     ))}
-                  </div>
-                ))}
-                
-                {!isTransforming && parsedRows.length === 0 && (
-                  <div className="h-64 flex flex-col items-center justify-center text-slate-700">
-                    <div className="w-12 h-12 border-2 border-slate-800 rounded-2xl flex items-center justify-center text-xl mb-4">＋</div>
-                    <p className="text-[10px] font-bold tracking-widest uppercase opacity-40">等待提取数据</p>
-                  </div>
-                )}
-
-                {isTransforming && !outputText && (
-                   <div className="py-20 flex flex-col items-center justify-center gap-3">
-                     <div className="w-8 h-8 border-4 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin"></div>
-                     <p className="text-[10px] font-bold text-indigo-400/60 uppercase animate-pulse">正在极速提取中...</p>
-                   </div>
-                )}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800">
+                  {parsedRows.map((row, i) => (
+                    <tr key={i} className="hover:bg-blue-500/10 transition-colors">
+                      {row.map((cell, j) => (
+                        <td key={j} className="px-4 py-3 border-r border-slate-800 text-slate-300 font-medium whitespace-nowrap">{cell || "-"}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-slate-700 gap-4">
+                <div className="w-16 h-16 border-4 border-slate-800 border-dashed rounded-3xl flex items-center justify-center text-2xl font-black opacity-20">?</div>
+                <div className="text-center">
+                  <p className="text-[10px] font-black tracking-[0.2em] uppercase opacity-40">等待数据输入</p>
+                  {isTransforming && (
+                    <div className="flex items-center justify-center gap-1 mt-2">
+                      <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce"></div>
+                      <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                      <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       </main>
-      <footer className="py-4 text-center text-[10px] text-slate-300 font-bold tracking-widest uppercase">
-        {COMPANY_NAME} · 极速模式已开启
+      <footer className="py-2.5 text-center text-[10px] text-slate-300 font-black border-t bg-white uppercase tracking-[0.3em]">
+        {COMPANY_NAME} · 极速提取模式
       </footer>
     </div>
   );
