@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 
 export async function* transformDailyReportStream(
@@ -6,58 +7,49 @@ export async function* transformDailyReportStream(
   templateHint: string,
   staffList: string[] = []
 ) {
-  // Always get the latest API_KEY right before making the request.
   const apiKey = process.env.API_KEY;
   
-  if (!apiKey || apiKey === "undefined" || apiKey.length < 5) {
-    throw new Error("请先点击上方按钮关联您的付费项目 API 密钥");
+  if (!apiKey || apiKey === "undefined") {
+    throw new Error("API 密钥未就绪，请在右上角重选项目并 Reset");
   }
 
-  // Create a new instance right before making an API call to ensure it uses the most up-to-date API key.
   const ai = new GoogleGenAI({ apiKey });
   
-  const staffCheckInstruction = staffList.length > 0 
-    ? `\n\n【人员名单】：[${staffList.join(", ")}]。请确保这些人在输出中都有对应的行。`
-    : "";
+  const staffCheck = staffList.length > 0 ? `确保名单内每个人都有数据：${staffList.join(", ")}` : "";
 
-  const systemPrompt = `你是一个顶级 TSV 数据解析专家。
-目标列：${columns.join(' | ')}
+  const prompt = `你是一个高效的数据提取助手。
+任务：将日报提取为 TSV 格式。
+列名：${columns.join('\t')}
 要求：
-1. 仅输出 TSV 纯文本。
-2. 严禁 Markdown 代码块标签。
-3. 确保数据对齐。
-${templateHint}${staffCheckInstruction}`;
+1. 直接输出 TSV，不要任何 Markdown 标记或解释。
+2. 缺失填“-”。
+3. 日期：YYYY/MM/DD。
+${templateHint}
+${staffCheck}
+
+日报原文：
+${rawText}`;
 
   try {
-    // Using gemini-3-pro-preview for complex reasoning and structured extraction tasks.
     const responseStream = await ai.models.generateContentStream({
-      model: "gemini-3-pro-preview",
-      contents: [{
-        parts: [{
-          text: systemPrompt + `\n\n日报原文：\n${rawText}`
-        }]
-      }],
+      model: "gemini-3-flash-preview",
+      contents: [{ parts: [{ text: prompt }] }],
       config: {
-        temperature: 0.1,
+        temperature: 0, // 设为 0 保证结果最稳定
+        thinkingConfig: { thinkingBudget: 0 } // 禁用思考过程，追求最快速度
       }
     });
 
     for await (const chunk of responseStream) {
-      // Accessing .text property directly as per the latest SDK guidelines.
       const text = (chunk as GenerateContentResponse).text;
       if (text) yield text;
     }
   } catch (error: any) {
-    console.error("Gemini API Error Detail:", error);
-    const errorStr = error.message || "";
-    
-    // Handle GCP-specific errors such as "Requested entity was not found" or "Quota exceeded".
-    if (errorStr.includes("Requested entity was not found")) {
-      throw new Error("Requested entity was not found (API 未在项目中启用)");
-    } else if (errorStr.includes("429")) {
-      throw new Error("QUOTA_EXHAUSTED");
+    console.error("Gemini API Error:", error);
+    // 捕获常见的权限/计费错误
+    if (error.message?.includes("entity was not found") || error.message?.includes("403") || error.message?.includes("429")) {
+      throw new Error("项目权限未同步：请点击右上角‘重选项目’，然后点击弹窗右下角的 Reset 按钮。");
     }
-    
-    throw new Error(errorStr);
+    throw new Error(error.message || "请求超时或网络异常，请检查代理设置。");
   }
 }
