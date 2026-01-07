@@ -6,33 +6,34 @@ export async function* transformDailyReportStream(
   templateHint: string,
   staffList: string[] = []
 ) {
-  // 优先从环境变量获取，如果没有则视为未配置
+  // 确保能从环境变量读取
   const apiKey = process.env.API_KEY;
   
-  if (!apiKey || apiKey === "undefined" || apiKey === "" || apiKey.length < 10) {
+  if (!apiKey || apiKey === "undefined" || apiKey.length < 5) {
     throw new Error("RUNTIME_KEY_MISSING");
   }
 
   const ai = new GoogleGenAI({ apiKey });
   
   const staffCheckInstruction = staffList.length > 0 
-    ? `\n\n【人员名单】：[${staffList.join(", ")}]。请确保名单中的每个人在结果中都有记录（无数据的标记为0或空）。`
+    ? `\n\n【人员名单】：[${staffList.join(", ")}]。请确保这些人在输出中都有对应的行。`
     : "";
 
-  const systemPrompt = `你是一个专业的数据处理助手。请将以下日报内容转换为结构化的 TSV 数据（不含表头）。
-列顺序必须严格遵守：${columns.join(' | ')}
-格式规范：
-1. 仅输出纯文本，严禁包含 Markdown 代码块标签。
-2. 使用制表符(Tab)进行列分隔。
-3. 每个人占一行。
+  const systemPrompt = `你是一个精准的 TSV 数据提取引擎。
+目标列：${columns.join(' | ')}
+格式：
+1. 直接输出 TSV 内容，禁止 Markdown 标签。
+2. 制表符分隔列。
+3. 每个人一行。
+4. 处理所有出现的员工。
 ${templateHint}${staffCheckInstruction}`;
 
   try {
     const responseStream = await ai.models.generateContentStream({
-      model: "gemini-flash-latest", // 切换到兼容性最好的 Flash 模型
+      model: "gemini-3-flash-preview",
       contents: [{
         parts: [{
-          text: systemPrompt + `\n\n待处理日报原文：\n${rawText}`
+          text: systemPrompt + `\n\n日报原文：\n${rawText}`
         }]
       }],
       config: {
@@ -45,16 +46,7 @@ ${templateHint}${staffCheckInstruction}`;
       if (text) yield text;
     }
   } catch (error: any) {
-    console.error("Gemini API Error:", error);
-    
-    // 抛出更具体的原始错误，方便定位
-    const errorBody = error.toString();
-    if (errorBody.includes("429") || errorBody.includes("Quota")) {
-      throw new Error("API 请求频率受限 (429)，请稍后再试。");
-    } else if (errorBody.includes("403") || errorBody.includes("401")) {
-      throw new Error("API 密钥验证失败 (401/403)，请检查环境变量是否生效。");
-    } else {
-      throw new Error(`AI 服务异常: ${error.message || '未知错误'}`);
-    }
+    console.error("API Error:", error);
+    throw new Error(error.message || "AI 服务响应异常");
   }
 }
