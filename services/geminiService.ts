@@ -6,10 +6,11 @@ export async function* transformDailyReportStream(
   templateHint: string,
   staffList: string[] = [] // 传入的应报人员名单
 ) {
+  // 实时从环境变量获取最新的 API Key (支持用户动态切换)
   const apiKey = process.env.API_KEY;
   
-  if (!apiKey || apiKey === "undefined") {
-    throw new Error("检测到未配置 API_KEY。请在 Zeabur 环境变量中添加 API_KEY 变量。");
+  if (!apiKey || apiKey === "undefined" || !apiKey.trim()) {
+    throw new Error("API 密钥缺失。请点击右上角【🔑 使用独立 API 密钥】配置您的项目密钥。");
   }
 
   const ai = new GoogleGenAI({ apiKey });
@@ -55,6 +56,21 @@ ${columns.map((col, i) => `${i + 1}. ${col}`).join('\n')}
     }
   } catch (error: any) {
     console.error("Gemini Error:", error);
-    throw new Error(error.message || "AI 引擎响应异常，请检查网络或密钥权限。");
+    const msg = error.message || "";
+    
+    // 针对 429 频率限制的定制化中文引导
+    if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED")) {
+      throw new Error("触发频率限制：当前公共 API Key 请求太频繁（免费版每分钟限制 15 次）。请点击右上角配置个人密钥，或等待 60 秒后再试。");
+    }
+    
+    if (msg.includes("API_KEY_INVALID")) {
+      throw new Error("API 密钥无效或已过期，请点击右上角重新配置。");
+    }
+    
+    if (msg.includes("Requested entity was not found")) {
+      throw new Error("密钥项目未找到，请点击右上角重置。");
+    }
+    
+    throw new Error("AI 引擎暂时无法响应，请稍后再试或检查网络配置。");
   }
 }
